@@ -21,11 +21,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: AsahiLuna/ChinaTextbook
+          sparse-checkout: |
+            ${{ github.event.inputs.subject || '高中/数学' }}
+          sparse-checkout-cone-mode: true
 
       - id: list
         run: |
           cd "${{ github.event.inputs.subject || '高中/数学' }}"
-          echo "=== Files in directory ==="
+          echo "=== Files ==="
           ls -la
           find . -maxdepth 1 -name "*.pdf" -type f ! -name "*.*" \
             | head -${{ github.event.inputs.limit || 3 }} > pdf_list.txt
@@ -45,7 +48,7 @@ jobs:
           repository: AsahiLuna/ChinaTextbook
           sparse-checkout: |
             ${{ matrix.pdf }}
-          sparse-checkout-cone-mode: false
+          sparse-checkout-cone-mode: true
 
       - uses: actions/setup-python@v5
         with:
