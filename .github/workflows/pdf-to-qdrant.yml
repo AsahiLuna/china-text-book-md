@@ -13,50 +13,19 @@ on:
 
 jobs:
   convert:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Download PDF
         run: |
-          PDF_PATH="${{ github.event.inputs.pdf_path }}"
-          ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$PDF_PATH'))")
-          curl -L "https://raw.githubusercontent.com/AsahiLuna/ChinaTextbook/master/$ENCODED" -o input.pdf
+          $PDF_PATH = "${{ github.event.inputs.pdf_path }}"
+          $ENCODED = [uri]::EscapeDataString($PDF_PATH)
+          $URL = "https://raw.githubusercontent.com/AsahiLuna/ChinaTextbook/main/$ENCODED"
+          curl -L $URL -o input.pdf
           ls -lh input.pdf
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Cache HuggingFace
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-v1
-          restore-keys: |
-            hf-models-
-
-      - name: Cache marker models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/datalab
-          key: marker-models-v1
-          restore-keys: |
-            marker-models-
-
-      - name: Cache torch
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/torch
-          key: torch-v1
-          restore-keys: |
-            torch-
 
       - name: Install marker
         run: pip install marker-pdf
