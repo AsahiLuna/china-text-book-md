@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       pdf_path:
-        description: 'PDF path (e.g., 高中/数学/湘教版-湖南教育出版社/普通高中教科书·数学必修 第一册.pdf)'
+        description: 'PDF path in repo (e.g., 高中/数学/xxx.pdf)'
         required: true
       chunk_size:
         description: 'Chunk size in characters'
@@ -12,43 +12,17 @@ on:
         default: '500'
 
 jobs:
-  download:
+  convert:
     runs-on: ubuntu-latest
-    outputs:
-      pdf_name: ${{ steps.download.outputs.name }}
     steps:
       - name: Download PDF
-        id: download
         run: |
           PDF_PATH="${{ github.event.inputs.pdf_path }}"
-          FILENAME=$(basename "$PDF_PATH")
+          ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$PDF_PATH'))")
           echo "Downloading: $PDF_PATH"
-          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
-          curl -L "https://raw.githubusercontent.com/AsahiLuna/ChinaTextbook/main/$(python3 -c "import urllib.parse; print(urllib.parse.quote('$PDF_PATH'))")" \
-            -o "$FILENAME"
-          ls -lh "$FILENAME"
-
-      - name: Upload PDF
-        uses: actions/upload-artifact@v4
-        with:
-          name: source-pdf
-          path: ${{ steps.download.outputs.name }}
-
-  convert:
-    needs: download
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download PDF
-        uses: actions/download-artifact@v4
-        with:
-          name: source-pdf
-          path: .
-
-      - name: Get filename
-        run: |
-          FILENAME=$(ls *.pdf | head -1)
-          echo "pdf_file=$FILENAME" >> $GITHUB_OUTPUT
-          echo "Processing: $FILENAME"
+          echo "Encoded: $ENCODED"
+          curl -L "https://raw.githubusercontent.com/AsahiLuna/ChinaTextbook/main/$ENCODED" -o input.pdf
+          ls -lh input.pdf
 
       - uses: actions/setup-python@v5
         with:
@@ -62,27 +36,21 @@ jobs:
           python -c "
           from marker.converters.pdf import PdfConverter
           from marker.models import create_model_dict
-          import os
-          pdf_file = '${{ env.pdf_file }}'
           converter = PdfConverter(artifact_dict=create_model_dict())
-          rendered = converter(pdf_file)
-          md_file = pdf_file + '.md'
-          with open(md_file, 'w', encoding='utf-8') as f:
+          rendered = converter('input.pdf')
+          with open('output.md', 'w', encoding='utf-8') as f:
               f.write(rendered.markdown)
-          print(f'Extracted to: {md_file}')
+          print('Extracted to output.md')
           "
 
       - name: Chunk & generate Qdrant JSON
         run: |
           python -c "
-          import json, re, os
-          pdf_file = '${{ env.pdf_file }}'
-          md_file = pdf_file + '.md'
+          import json, re
           chunk_size = int('${{ github.event.inputs.chunk_size }}')
+          text = open('output.md', 'r', encoding='utf-8').read()
           
-          text = open(md_file, 'r', encoding='utf-8').read()
           chunks, current = [], ''
-          
           for para in re.split(r'\n\n+', text):
               if len(current) + len(para) < chunk_size:
                   current += para + '\n\n'
@@ -92,11 +60,11 @@ jobs:
           if current: chunks.append(current.strip())
           
           points = [{
-              'id': hash(pdf_file + str(i)) % 1000000000,
+              'id': hash('${{ github.event.inputs.pdf_path }}' + str(i)) % 1000000000,
               'vector': [0.0] * 1536,
               'payload': {
                   'text': c,
-                  'source': pdf_file,
+                  'source': '${{ github.event.inputs.pdf_path }}',
                   'chunk_id': i
               }
           } for i, c in enumerate(chunks) if len(c) > 50]
