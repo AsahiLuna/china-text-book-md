@@ -19,20 +19,19 @@ jobs:
         run: |
           PDF_PATH="${{ github.event.inputs.pdf_path }}"
           ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$PDF_PATH'))")
-          curl -L "https://raw.githubusercontent.com/AsahiLuna/ChinaTextbook/main/$ENCODED" -o input.pdf
+          echo "Original: $PDF_PATH"
+          echo "Encoded: $ENCODED"
+          URL="https://raw.githubusercontent.com/AsahiLuna/ChinaTextbook/master/$ENCODED"
+          echo "URL: $URL"
+          curl -L "$URL" -o input.pdf
+          echo "=== File info ==="
           ls -lh input.pdf
+          file input.pdf
+          head -c 8 input.pdf | xxd
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-marker-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-marker-
 
       - name: Install marker
         run: pip install marker-pdf
