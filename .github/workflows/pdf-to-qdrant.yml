@@ -95,7 +95,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ 'qdrant-' + replace(replace(matrix.pdf, '/', '_'), '.pdf', '') }}
+          name: ${{ github.run_id }}-${{ matrix.job }}
           path: qdrant_import.json
 
   merge:
