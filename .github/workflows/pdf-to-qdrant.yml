@@ -3,52 +3,52 @@ name: PDF to Qdrant
 on:
   workflow_dispatch:
     inputs:
-      subject:
-        description: 'Subject (e.g., 高中/数学)'
+      pdf_path:
+        description: 'PDF path (e.g., 高中/数学/湘教版-湖南教育出版社/普通高中教科书·数学必修 第一册.pdf)'
+        required: true
+      chunk_size:
+        description: 'Chunk size in characters'
         required: false
-        default: '高中/数学'
-      limit:
-        description: 'Max PDFs (0=all)'
-        required: false
-        default: '3'
+        default: '500'
 
 jobs:
-  setup:
+  download:
     runs-on: ubuntu-latest
     outputs:
-      pdf_list: ${{ steps.list.outputs.files }}
+      pdf_name: ${{ steps.download.outputs.name }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: AsahiLuna/ChinaTextbook
-          sparse-checkout: |
-            ${{ github.event.inputs.subject || '高中/数学' }}
-          sparse-checkout-cone-mode: true
-
-      - id: list
+      - name: Download PDF
+        id: download
         run: |
-          cd "${{ github.event.inputs.subject || '高中/数学' }}"
-          echo "=== Files ==="
-          ls -la
-          find . -maxdepth 1 -name "*.pdf" -type f ! -name "*.*" \
-            | head -${{ github.event.inputs.limit || 3 }} > pdf_list.txt
-          echo "=== PDF list ==="
-          cat pdf_list.txt
-          echo "files=$(cat pdf_list.txt | jq -R -s -c 'split(\"\n\") | map(select(length > 0))')" >> $GITHUB_OUTPUT
+          PDF_PATH="${{ github.event.inputs.pdf_path }}"
+          FILENAME=$(basename "$PDF_PATH")
+          echo "Downloading: $PDF_PATH"
+          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+          curl -L "https://raw.githubusercontent.com/AsahiLuna/ChinaTextbook/main/$(python3 -c "import urllib.parse; print(urllib.parse.quote('$PDF_PATH'))")" \
+            -o "$FILENAME"
+          ls -lh "$FILENAME"
+
+      - name: Upload PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-pdf
+          path: ${{ steps.download.outputs.name }}
 
   convert:
-    needs: setup
+    needs: download
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        pdf: ${{ fromJSON(needs.setup.outputs.pdf_list) }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Download PDF
+        uses: actions/download-artifact@v4
         with:
-          repository: AsahiLuna/ChinaTextbook
-          sparse-checkout: |
-            ${{ matrix.pdf }}
-          sparse-checkout-cone-mode: true
+          name: source-pdf
+          path: .
+
+      - name: Get filename
+        run: |
+          FILENAME=$(ls *.pdf | head -1)
+          echo "pdf_file=$FILENAME" >> $GITHUB_OUTPUT
+          echo "Processing: $FILENAME"
 
       - uses: actions/setup-python@v5
         with:
@@ -57,61 +57,57 @@ jobs:
       - name: Install marker
         run: pip install marker-pdf
 
-      - name: Merge if split
-        if: contains(matrix.pdf, '.pdf.')
-        run: |
-          cat "${{ matrix.pdf }}".* > "${{ matrix.pdf }}.merged.pdf"
-          mv "${{ matrix.pdf }}.merged.pdf" "${{ matrix.pdf }}"
-
       - name: Extract PDF
         run: |
           python -c "
           from marker.converters.pdf import PdfConverter
           from marker.models import create_model_dict
+          import os
+          pdf_file = '${{ env.pdf_file }}'
           converter = PdfConverter(artifact_dict=create_model_dict())
-          rendered = converter('${{ matrix.pdf }}')
-          with open('${{ matrix.pdf }}.md', 'w', encoding='utf-8') as f:
+          rendered = converter(pdf_file)
+          md_file = pdf_file + '.md'
+          with open(md_file, 'w', encoding='utf-8') as f:
               f.write(rendered.markdown)
+          print(f'Extracted to: {md_file}')
           "
 
       - name: Chunk & generate Qdrant JSON
         run: |
           python -c "
-          import json, re
-          from pathlib import Path
-          text = Path('${{ matrix.pdf }}.md').read_text(encoding='utf-8')
+          import json, re, os
+          pdf_file = '${{ env.pdf_file }}'
+          md_file = pdf_file + '.md'
+          chunk_size = int('${{ github.event.inputs.chunk_size }}')
+          
+          text = open(md_file, 'r', encoding='utf-8').read()
           chunks, current = [], ''
+          
           for para in re.split(r'\n\n+', text):
-              if len(current) + len(para) < 500:
+              if len(current) + len(para) < chunk_size:
                   current += para + '\n\n'
               else:
                   if current: chunks.append(current.strip())
                   current = para + '\n\n'
           if current: chunks.append(current.strip())
+          
           points = [{
-              'id': hash('${{ matrix.pdf }}' + str(i)) % 1000000000,
+              'id': hash(pdf_file + str(i)) % 1000000000,
               'vector': [0.0] * 1536,
-              'payload': {'text': c, 'source': '${{ matrix.pdf }}', 'chunk_id': i}
+              'payload': {
+                  'text': c,
+                  'source': pdf_file,
+                  'chunk_id': i
+              }
           } for i, c in enumerate(chunks) if len(c) > 50]
-          with open('qdrant_import.json', 'w') as f:
+          
+          with open('qdrant_import.json', 'w', encoding='utf-8') as f:
               json.dump({'points': points}, f, ensure_ascii=False, indent=2)
+          print(f'Generated {len(points)} chunks')
           "
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Qdrant JSON
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.run_id }}-${{ matrix.job }}
+          name: qdrant-result
           path: qdrant_import.json
-
-  merge:
-    needs: convert
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - run: |
-          cat artifacts/*.json | jq -s 'reduce .[] as $x ({"points": []}; .points += $x.points)' > qdrant_final.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: qdrant-final
-          path: qdrant_final.json
