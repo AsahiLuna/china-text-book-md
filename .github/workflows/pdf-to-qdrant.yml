@@ -19,19 +19,20 @@ jobs:
         run: |
           PDF_PATH="${{ github.event.inputs.pdf_path }}"
           ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$PDF_PATH'))")
-          echo "Original: $PDF_PATH"
-          echo "Encoded: $ENCODED"
-          URL="https://raw.githubusercontent.com/AsahiLuna/ChinaTextbook/master/$ENCODED"
-          echo "URL: $URL"
-          curl -L "$URL" -o input.pdf
-          echo "=== File info ==="
+          curl -L "https://raw.githubusercontent.com/AsahiLuna/ChinaTextbook/master/$ENCODED" -o input.pdf
           ls -lh input.pdf
-          file input.pdf
-          head -c 8 input.pdf | xxd
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Cache marker models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/datalab
+          key: marker-models-v1
+          restore-keys: |
+            marker-models-
 
       - name: Install marker
         run: pip install marker-pdf
