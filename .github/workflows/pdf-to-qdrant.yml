@@ -1,0 +1,119 @@
+name: PDF to Qdrant
+
+on:
+  workflow_dispatch:
+    inputs:
+      subject:
+        description: 'Subject (e.g., 高中/数学)'
+        required: false
+        default: '高中/数学'
+      limit:
+        description: 'Max PDFs (0=all)'
+        required: false
+        default: '3'
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      pdf_list: ${{ steps.list.outputs.files }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            ${{ github.event.inputs.subject || '高中/数学' }}
+
+      - id: list
+        run: |
+          cd "${{ github.event.inputs.subject || '高中/数学' }}"
+          find . -maxdepth 1 -name "*.pdf" -type f ! -name "*.*" \
+            | head -${{ github.event.inputs.limit || 3 }} > pdf_list.txt
+          echo "files=$(cat pdf_list.txt | jq -R -s -c 'split(\"\\n\") | map(select(length > 0))')" >> $GITHUB_OUTPUT
+
+  convert:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pdf: ${{ fromJSON(needs.setup.outputs.pdf_list) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            ${{ matrix.pdf }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install marker
+        run: pip install marker-pdf
+
+      - name: Merge if split
+        if: contains(matrix.pdf, '.pdf.')
+        run: |
+          cat "${{ matrix.pdf }}".* > "${{ matrix.pdf }}.merged.pdf"
+          mv "${{ matrix.pdf }}.merged.pdf" "${{ matrix.pdf }}"
+
+      - name: Extract PDF
+        run: |
+          python -c "
+          from marker.converters.pdf import PdfConverter
+          from marker.models import create_model_dict
+          converter = PdfConverter(artifact_dict=create_model_dict())
+          rendered = converter('${{ matrix.pdf }}')
+          with open('${{ matrix.pdf }}.md', 'w', encoding='utf-8') as f:
+              f.write(rendered.markdown)
+          "
+
+      - name: Chunk & generate Qdrant JSON
+        run: |
+          python -c "
+          import json, re
+          from pathlib import Path
+
+          text = Path('${{ matrix.pdf }}.md').read_text(encoding='utf-8')
+          chunks, current = [], ''
+          
+          for para in re.split(r'\n\n+', text):
+              if len(current) + len(para) < 500:
+                  current += para + '\n\n'
+              else:
+                  if current: chunks.append(current.strip())
+                  current = para + '\n\n'
+          if current: chunks.append(current.strip())
+
+          points = [{
+              'id': hash('${{ matrix.pdf }}' + str(i)) % 1000000000,
+              'vector': [0.0] * 1536,
+              'payload': {
+                  'text': c,
+                  'source': '${{ matrix.pdf }}',
+                  'chunk_id': i
+              }
+          } for i, c in enumerate(chunks) if len(c) > 50]
+
+          with open('qdrant_import.json', 'w') as f:
+              json.dump({'points': points}, f, ensure_ascii=False, indent=2)
+          print(f'Chunks: {len(points)}')
+          "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qdrant-${{ matrix.pdf | replace('/', '_') | replace('.pdf', '') }}
+          path: qdrant_import.json
+
+  merge:
+    needs: convert
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - run: |
+          cat artifacts/*.json | jq -s 'reduce .[] as $x ({\"points\": []}; .points += $x.points)' > qdrant_final.json
+          echo "Total: $(cat qdrant_final.json | jq '.points | length')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qdrant-final
+          path: qdrant_final.json
