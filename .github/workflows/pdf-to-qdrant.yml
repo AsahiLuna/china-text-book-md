@@ -26,6 +26,22 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Cache HuggingFace
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-v1
+          restore-keys: |
+            hf-models-
+
       - name: Cache marker models
         uses: actions/cache@v4
         with:
@@ -33,6 +49,14 @@ jobs:
           key: marker-models-v1
           restore-keys: |
             marker-models-
+
+      - name: Cache torch
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/torch
+          key: torch-v1
+          restore-keys: |
+            torch-
 
       - name: Install marker
         run: pip install marker-pdf
